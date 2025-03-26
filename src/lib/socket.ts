@@ -1,7 +1,6 @@
 import { Server as NetServer } from "http";
 import { Server as SocketIOServer } from "socket.io";
 import { NextApiResponse } from "next";
-import { prisma } from "./prisma";
 
 export type NextApiResponseWithSocket = NextApiResponse & {
   socket: {
@@ -11,62 +10,37 @@ export type NextApiResponseWithSocket = NextApiResponse & {
   };
 };
 
-export const initSocket = (res: NextApiResponseWithSocket) => {
-  if (!res.socket.server.io) {
-    const io = new SocketIOServer(res.socket.server);
-    res.socket.server.io = io;
+export const initializeSocket = (server: NetServer) => {
+  const io = new SocketIOServer(server, {
+    cors: {
+      origin: process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3001",
+      methods: ["GET", "POST"],
+    },
+  });
 
-    io.on("connection", (socket) => {
-      console.log("Client connected:", socket.id);
+  io.on("connection", (socket) => {
+    const { channelId, userId } = socket.handshake.query;
 
-      socket.on("join-channel", (channelId: string) => {
-        socket.join(channelId);
-        console.log(`User joined channel: ${channelId}`);
-      });
+    if (!channelId || !userId) {
+      socket.disconnect();
+      return;
+    }
 
-      socket.on("leave-channel", (channelId: string) => {
-        socket.leave(channelId);
-        console.log(`User left channel: ${channelId}`);
-      });
+    console.log(`User ${userId} connected to channel ${channelId}`);
 
-      socket.on(
-        "send-message",
-        async (data: {
-          content: string;
-          channelId: string;
-          userId: string;
-        }) => {
-          try {
-            const message = await prisma.message.create({
-              data: {
-                content: data.content,
-                channelId: data.channelId,
-                userId: data.userId,
-              },
-              include: {
-                user: {
-                  select: {
-                    id: true,
-                    name: true,
-                    email: true,
-                    image: true,
-                  },
-                },
-              },
-            });
+    // Join the channel room
+    socket.join(channelId as string);
 
-            io.to(data.channelId).emit("new-message", message);
-          } catch (error) {
-            console.error("Error sending message:", error);
-          }
-        }
-      );
-
-      socket.on("disconnect", () => {
-        console.log("Client disconnected:", socket.id);
-      });
+    socket.on("message", async (message) => {
+      // Broadcast the message to all clients in the channel
+      io.to(channelId as string).emit("message", message);
     });
-  }
 
-  return res.socket.server.io;
+    socket.on("disconnect", () => {
+      console.log(`User ${userId} disconnected from channel ${channelId}`);
+      socket.leave(channelId as string);
+    });
+  });
+
+  return io;
 };

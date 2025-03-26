@@ -1,6 +1,8 @@
 import { prisma } from "@/lib/prisma";
 import { Chat } from "@/components/chat/Chat";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
 
 interface PageProps {
   params: {
@@ -23,7 +25,7 @@ interface MessageWithUser {
   };
 }
 
-async function getChannel(channelId: string) {
+async function getChannel(channelId: string, userId: string) {
   const channel = await prisma.channel.findUnique({
     where: { id: channelId },
     include: {
@@ -39,9 +41,12 @@ async function getChannel(channelId: string) {
           },
         },
         orderBy: {
-          createdAt: "asc",
+          createdAt: "desc",
         },
-        take: 50, // Limit to last 50 messages
+        take: 15, // Reduced from 20 to 15 for faster initial load
+      },
+      members: {
+        where: { userId },
       },
     },
   });
@@ -50,11 +55,23 @@ async function getChannel(channelId: string) {
     notFound();
   }
 
+  // Check if user has access to private channel
+  if (channel.isPrivate && channel.members.length === 0) {
+    redirect("/channels");
+  }
+
+  channel.messages = channel.messages.reverse();
   return channel;
 }
 
 export default async function ChannelPage({ params }: PageProps) {
-  const channel = await getChannel(params.channelId);
+  const session = await getServerSession(authOptions);
+
+  if (!session?.user) {
+    redirect("/login");
+  }
+
+  const channel = await getChannel(params.channelId, session.user.id);
 
   return (
     <div className="flex-1 flex flex-col bg-white dark:bg-gray-800">
